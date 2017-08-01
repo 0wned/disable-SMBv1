@@ -159,4 +159,4 @@ foreach ($pc in $computers){
     }
 }
 
-$output | export-csv
+$output | export-csv $outputPath
