@@ -1,4 +1,11 @@
+#Enter here the filter for the computer(s) you want to modify
+
 #$computers = Get-ADComputer -Filter {(Enabled -eq $true)}
+
+$computers = Get-ADComputer -Filter {(Enabled -eq $true)}
+$outputPath = "C:\temp\output.csv"
+$force_SMBv1_disable = $false
+$output = @()
 
 #This function takes in the name of a PC and checks it's windows Version
 #Returns True is version is above Windows 8 / Server 2008
@@ -21,29 +28,33 @@ function isNewOS($pcname){
 function disable_SMB1($pcname, $isNew){
     $cim = New-CimSession -ComputerName $pcname
 
-    if ($isNew){
-        Set-SmbServerConfiguration -EnableSMB1Protocol $false -CimSession $cim -Force
-		Set-SmbServerConfiguration -EnableSMB2Protocol $true -CimSession $cim -Force
-    }
-    else{
-		#Sets RegKey SMBv1 to False
-        Invoke-Command -ComputerName $pcname -ScriptBlock {
+    if ($force_SMBv1_disable){ 
+        if ($isNew){
+            Set-SmbServerConfiguration -EnableSMB1Protocol $false -CimSession $cim -Force
+		    Set-SmbServerConfiguration -EnableSMB2Protocol $true -CimSession $cim -Force
+        }
+        else{
+		    #Sets RegKey SMBv1 to False
+            Invoke-Command -ComputerName $pcname -ScriptBlock {
             Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" SMB1 -Type DWORD -Value 0 -Force}
 
-		#Sets RegKey SMBv2 to True		
-		Invoke-Command -ComputerName $pcname -ScriptBlock {
+		    #Sets RegKey SMBv2 to True		
+		    Invoke-Command -ComputerName $pcname -ScriptBlock {
             Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" SMB2 -Type DWORD -Value 1 -Force}
+        }
     }
-
 }
 
 function get_SMBv1_is_enabled($pcname, $isNew){
     $SMB=@{}
-
-    $cim = New-CimSession -ComputerName $pcname
+    try{
+        $cim = New-CimSession -ErrorAction stop -ComputerName $pcname
+    }catch{
+        return $null
+    }
 
     if ($isNew){
-        $tmp = Get-SmbServerConfiguration -CimSession $cim | select EnableSMB1Protocol,EnableSMB2Protocol
+        $tmp = Get-SmbServerConfiguration -ErrorAction Stop -CimSession $cim | select EnableSMB1Protocol,EnableSMB2Protocol
             
         $SMB.Add("EnableSMB1Protocol", $tmp.EnableSMB1Protocol)
         $SMB.Add("EnableSMB2Protocol", $tmp.EnableSMB2Protocol)
@@ -71,36 +82,47 @@ function get_SMBv1_is_enabled($pcname, $isNew){
 
 #This function generate an output from the Array that was created
 function generate_output($ComputerName, $IPAddress, $SMB, $isSMBv1Disabled, $Comment){
+    #Write-Host  $ComputerName "'" $IPAddress "'" $SMB.EnableSMB1Protocol "'" $SMB.EnableSMB2Protocol "'" $isSMBv1Disabled "'" $Comment 
+    
     $output = New-Object PsObject -Property @{
-        
-        "Computer Name" = $ComputerName.ToString()
-        "IP Address" = $IPAddress.ToString()
-        "SMBv1" = $SMB.EnableSMB1Protocol.ToString() 
-        "SMBv2" = $SMB.EnableSMB2Protocol.ToString() 
+        "Computer Name"      = $ComputerName.ToString()
+        "IP Address"         = $IPAddress.ToString()
+        "SMBv1"              = $SMB.EnableSMB1Protocol.ToString() 
+        "SMBv2"              = $SMB.EnableSMB2Protocol.ToString() 
         "was_SMBv1_Disabled" = $isSMBv1Disabled.ToString()
-        "Comments" = $Comment.ToString()
+        "Comments"           = $Comment.ToString()
     }
     return $output
 }
- 
-$computers = Get-ADComputer -Filter {(Name -like "*") -and (Enabled -eq $true)} -Property IPv4Address, Name
-$output = @()
 
 foreach ($pc in $computers){
 	#Setup the variables that will populate the output
-	$ComputerName = $IPAddress = $isSMBv1Disabled = $Comment = ""
+	$ComputerName = ""
+    $IPAddress = ""
+    $isSMBv1Disabled = ""
+    $Comment = "None"
     $SMB=@{}
 
-	$ComputerName = $pc.Name
-	$IPAddress = $pc.IPv4Address
-
+    $ComputerName = $pc.Name
     #Short ping to make sure I dont get have to wait the full timeout length
     if (Test-Connection -ComputerName $ComputerName -BufferSize 16 -Count 1 -Quiet -ErrorAction SilentlyContinue){		
-    	#$cim = New-CimSession -ComputerName $ComputerName
+    	
+        if (!$pc.IPv4Address -eq $null) {
+            $IPAddress = $pc.IPv4Address
+        }else {
+            $tmp = [System.Net.Dns]::GetHostAddresses($ComputerName)
+            if (!$tmp -eq $null){$IPAddress = $tmp}
+            else{$IPAddress = "Couldn't retrieve the IP Address"}
+        }
+	    
         $isNew = isNewOS $ComputerName
-
-        Write-Host "[+]" $ComputerName "OS Version is new :" $isNew
         $SMB = get_SMBv1_is_enabled $ComputerName $isNew
+        Write-Host -ForegroundColor Yellow "[+]" $ComputerName "OS Version is new :" $isNew
+
+        if ($SMB -eq $null){
+            write-host -foregroundcolor Red "    Error Retrieving information from $ComputerName Probably WinRM isn't enabled"
+            continue
+        }
 
        	if ($SMB.EnableSMB1Protocol -eq $true){
        		Write-Host "   "$ComputerName "SMBv1 is Enabled... Verifying if SMB2 is also enabled..."
@@ -108,9 +130,13 @@ foreach ($pc in $computers){
 			if ($SMB.EnableSMB2Protocol -eq $true){
             	Write-Host "    SMBv2 is Enabled, Disabling SMBv1..."
   				try {
-                	disable_SMB1 $ComputerName $isNew 
-                    Write-Host -ForegroundColor Green "    Successfully disabled SMBv1 on host : " $ComputerName
-					$isSMBv1Disabled = $true
+                	disable_SMB1 $ComputerName $isNew
+                    if(!$force_SMBv1_disable){
+                        Write-Host -ForegroundColor Green "    Didnt enforce to disable SMBv1 on host : " $ComputerName
+                    }else{
+                        Write-Host -ForegroundColor Green "    Successfully disabled SMBv1 on host : " $ComputerName
+					}
+                    $isSMBv1Disabled = $true
                	}
                	catch{
                     Write-Host $_.Exception.Message
@@ -133,5 +159,4 @@ foreach ($pc in $computers){
     }
 }
 
-$output
-$output | export-csv C:\temp\output.csv
+$output | export-csv $outputPath
