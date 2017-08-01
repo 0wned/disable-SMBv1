@@ -107,12 +107,18 @@ foreach ($pc in $computers){
     #Short ping to make sure I dont get have to wait the full timeout length
     if (Test-Connection -ComputerName $ComputerName -BufferSize 16 -Count 1 -Quiet -ErrorAction SilentlyContinue){		
     	
-        if (!$pc.IPv4Address -eq $null) {
+        if ( -not $pc.IPv4Address -eq $null) {
             $IPAddress = $pc.IPv4Address
         }else {
             $tmp = [System.Net.Dns]::GetHostAddresses($ComputerName)
-            if (!$tmp -eq $null){$IPAddress = $tmp}
-            else{$IPAddress = "Couldn't retrieve the IP Address"}
+       	if ($tmp -eq $null){
+			$IPAddress = "Couldn't retrieve the IP Address"
+       	}
+        else{
+			$ips = "|"
+            foreach ($i in $tmp){$ips += $i.IPAddressToString + "|"}
+            	$IPAddress = $ips
+            }
         }
 	    
         $isNew = isNewOS $ComputerName
