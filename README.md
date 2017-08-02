@@ -14,9 +14,13 @@ I know that you could actually do this with GPO but I needed to know which compu
 
 First parameters are 
 
-1. $computers = Get-ADComputer -Filter {(Enabled -eq $true)}
-  - Filter to select the PC in your Active Directory you actually want to check
-2. $outputPath = "C:\temp\output.csv"
-  - Specify where you want the csv saved
-3. $force_SMBv1_disable = $false
-  - $true is you want to actually change the set-smbserverconfiguration / RegKey of the selected computer
+``` powershell
+$computers = Get-ADComputer -Filter {(Enabled -eq $true)}
+#Filter to select the PC in your Active Directory you actually want to check
+
+$outputPath = "C:\temp\output.csv"
+#Specify where you want the csv saved
+
+$force_SMBv1_disable = $false
+#$true is you want to actually change the set-smbserverconfiguration / RegKey of the selected computer
+```
